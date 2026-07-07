@@ -278,7 +278,7 @@ def chat():
     if not query.strip():
         return jsonify({"error": "Empty query"}), 400
         
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
     result = run_assistant_query(query, api_key=api_key)
     
     return jsonify(result)

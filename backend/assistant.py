@@ -313,10 +313,219 @@ def run_mock_assistant(query):
         )
         return answer, "none", {}
 
+def run_gemini_query(query, api_key):
+    import urllib.request
+    import urllib.parse
+    import json
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    
+    gemini_tools = {
+        "function_declarations": [
+            {
+                "name": "get_pending_fees",
+                "description": "Get the total amount of outstanding/pending school fees. Can optionally filter by class.",
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "class_name": {
+                            "type": "STRING",
+                            "description": "The specific class name to filter by (e.g., 'Grade 8', 'Grade 9', etc.)"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "get_todays_collections",
+                "description": "Get the details and sum of fees collected today (or on the latest day of transaction updates).",
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "get_outstanding_by_class",
+                "description": "Gets outstanding balance details grouped by class, including identifying which class has the highest outstanding amount.",
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "get_flagged_anomalies",
+                "description": "Get the list of unusual/anomalous expenses flagged by the machine learning engine (Isolation Forest).",
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "period": {
+                            "type": "STRING",
+                            "description": "The time frame to check (week, month, all)"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "forecast_revenue",
+                "description": "Predict future revenue for the next few months based on time-series historical data.",
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "months_ahead": {
+                            "type": "INTEGER",
+                            "description": "How many months into the future to predict (default: 3)"
+                        }
+                    }
+                }
+            }
+        ]
+    }
+    
+    system_instruction = {
+        "parts": [{
+            "text": (
+                "You are the EduLedger AI Financial Assistant. You are connected to a school database. "
+                "You must ONLY query the database using the tools provided. Do not write SQL or guess values. "
+                "Analyze the tool outputs and explain them in friendly, plain natural language. "
+                "Format your final answers cleanly in Markdown."
+            )
+        }]
+    }
+
+    payload = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": query}]
+            }
+        ],
+        "tools": [gemini_tools],
+        "systemInstruction": system_instruction
+    }
+
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST"
+    )
+    
+    with urllib.request.urlopen(req) as response:
+        resp_data = json.loads(response.read().decode("utf-8"))
+        
+    candidates = resp_data.get("candidates", [])
+    if not candidates:
+        return {"response": "Sorry, I couldn't generate a response.", "mock": False, "tool_calls": []}
+        
+    first_candidate = candidates[0]
+    content = first_candidate.get("content", {})
+    parts = content.get("parts", [])
+    
+    tool_calls_executed = []
+    
+    function_call = None
+    for part in parts:
+        if "functionCall" in part:
+            function_call = part["functionCall"]
+            break
+            
+    if function_call:
+        tool_name = function_call["name"]
+        # Gemini args might be a dict or missing
+        tool_args = function_call.get("args", {})
+        
+        print(f"Gemini invoking tool: {tool_name} with args {tool_args}")
+        
+        if tool_name == "get_pending_fees":
+            result = get_pending_fees(tool_args.get("class_name"))
+        elif tool_name == "get_todays_collections":
+            result = get_todays_collections()
+        elif tool_name == "get_outstanding_by_class":
+            result = get_outstanding_by_class()
+        elif tool_name == "get_flagged_anomalies":
+            result = get_flagged_anomalies(tool_args.get("period", "all"))
+        elif tool_name == "forecast_revenue":
+            # Convert float/string arguments if any
+            months = 3
+            if "months_ahead" in tool_args:
+                try:
+                    months = int(tool_args["months_ahead"])
+                except Exception:
+                    pass
+            result = forecast_revenue_assistant(months)
+        else:
+            result = {"error": f"Tool {tool_name} not found"}
+            
+        tool_calls_executed.append({
+            "name": tool_name,
+            "args": tool_args,
+            "result": result
+        })
+        
+        second_turn_contents = [
+            {
+                "role": "user",
+                "parts": [{"text": query}]
+            },
+            {
+                "role": "model",
+                "parts": [
+                    {
+                        "functionCall": function_call
+                    }
+                ]
+            },
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "functionResponse": {
+                            "name": tool_name,
+                            "response": {"result": result}
+                        }
+                    }
+                ]
+            }
+        ]
+        
+        second_payload = {
+            "contents": second_turn_contents,
+            "tools": [gemini_tools],
+            "systemInstruction": system_instruction
+        }
+        
+        req2 = urllib.request.Request(
+            url,
+            data=json.dumps(second_payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        
+        with urllib.request.urlopen(req2) as response2:
+            resp_data2 = json.loads(response2.read().decode("utf-8"))
+            
+        final_candidates = resp_data2.get("candidates", [])
+        if final_candidates:
+            final_text = final_candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+            return {
+                "response": final_text,
+                "mock": False,
+                "tool_calls": tool_calls_executed
+            }
+            
+    text_parts = [p.get("text", "") for p in parts if "text" in p]
+    return {
+        "response": "".join(text_parts),
+        "mock": False,
+        "tool_calls": []
+    }
+
 def run_assistant_query(query, api_key=None):
     if not api_key:
+        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
+
+    if not api_key:
         # Fallback to custom Mock Agent
-        print("No Anthropic API Key found. Running Mock Assistant.")
+        print("No API Key found. Running Mock Assistant.")
         ans, tool, tool_data = run_mock_assistant(query)
         return {
             "response": ans,
@@ -324,6 +533,19 @@ def run_assistant_query(query, api_key=None):
             "tool_calls": [{"name": tool, "args": {}, "result": tool_data}] if tool != "none" else []
         }
         
+    if api_key.startswith("AIzaSy"):
+        try:
+            print("Running Gemini Assistant...")
+            return run_gemini_query(query, api_key)
+        except Exception as e:
+            print(f"Error in Gemini Assistant API: {e}. Falling back to Mock.")
+            ans, tool, tool_data = run_mock_assistant(query)
+            return {
+                "response": f"*(Gemini API Error: {e}. Displaying offline assistant result)*\n\n{ans}",
+                "mock": True,
+                "tool_calls": [{"name": tool, "args": {}, "result": tool_data}] if tool != "none" else []
+            }
+
     try:
         client = anthropic.Anthropic(api_key=api_key)
         
