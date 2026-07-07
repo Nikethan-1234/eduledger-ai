@@ -1,0 +1,40 @@
+# Node dependencies
+node_modules/
+**/node_modules/
+
+# Production builds
+dist/
+**/dist/
+build/
+**/build/
+
+# Local Environment Variables
+.env
+*.env
+**/.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Python cache & virtualenvs
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+**/env/
+venv/
+**/venv/
+.venv/
+**/.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# IDEs & System files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
